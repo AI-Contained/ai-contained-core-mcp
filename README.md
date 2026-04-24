@@ -12,7 +12,34 @@ mcp = FastMCP("my-server")
 load_providers(mcp)
 ```
 
-`load_providers` discovers all packages registered under the `ai-contained.provider` entry point group and loads them into the provided `FastMCP` instance.
+`load_providers` discovers all packages registered under the `ai_contained.provider` entry point group and loads them into the provided `FastMCP` instance.
+
+## Filtering Providers
+
+Two environment variables control which providers are loaded:
+
+| Variable | Description |
+|---|---|
+| `ALLOWED_PROVIDERS` | Comma-separated list of provider names to load. All others are skipped. If unset, all providers are loaded. |
+| `DENIED_PROVIDERS` | Comma-separated list of provider names to skip. Takes precedence over `ALLOWED_PROVIDERS`. |
+
+**Load only the `filesystem` provider:**
+```bash
+ALLOWED_PROVIDERS=filesystem
+```
+
+**Load all providers except `shell`:**
+```bash
+DENIED_PROVIDERS=shell
+```
+
+**Load `filesystem` and `git`, but not `shell`:**
+```bash
+ALLOWED_PROVIDERS=filesystem,git
+DENIED_PROVIDERS=shell
+```
+
+Provider names are case-sensitive and must match the entry point name exactly.
 
 ## Installation
 
