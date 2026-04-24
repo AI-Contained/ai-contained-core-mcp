@@ -17,7 +17,7 @@ load_providers(mcp)
 ## Installation
 
 ```bash
-pip install "ai-contained-core-mcp @ https://github.com/AI-Contained/core-mcp/archive/refs/tags/v0.0.1.zip"
+pip install "ai-contained-core-mcp @ https://github.com/AI-Contained/core-mcp/archive/refs/tags/v0.0.2.zip"
 ```
 
 ## Creating a Provider
@@ -26,7 +26,7 @@ pip install "ai-contained-core-mcp @ https://github.com/AI-Contained/core-mcp/ar
 2. Register it in `pyproject.toml`:
 
 ```toml
-[project.entry-points."ai-contained.provider"]
+[project.entry-points."ai_contained.provider"]
 myprovider = "my_package:register"
 ```
 

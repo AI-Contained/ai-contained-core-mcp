@@ -8,7 +8,7 @@ logger = get_logger("ai_contained")
 
 def load_providers(mcp: FastMCP) -> FastMCP:
     """Auto-discover and load all installed ai-contained providers into a FastMCP instance."""
-    for entry_point in importlib.metadata.entry_points(group="ai-contained.provider"):
+    for entry_point in importlib.metadata.entry_points(group="ai_contained.provider"):
         try:
             provider = entry_point.load()
             provider(mcp)
