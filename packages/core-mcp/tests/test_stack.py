@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -185,12 +186,15 @@ def describe_Stack() -> None:
             async with Stack() as s:
                 s.exec("aws").returns(ExecResponse(stdout=payload))
                 s.exec("jq").returns(ExecResponse(stdout="[]"))
+                read_fd, write_fd = os.pipe()
                 aws = await asyncio.create_subprocess_exec(
-                    "aws", "s3api", "list-buckets", env=dict(s.env), stdout=asyncio.subprocess.PIPE
+                    "aws", "s3api", "list-buckets", env=dict(s.env), stdout=write_fd
                 )
+                os.close(write_fd)
                 jq = await asyncio.create_subprocess_exec(
-                    "jq", ".Buckets", env=dict(s.env), stdin=aws.stdout, stdout=asyncio.subprocess.PIPE
+                    "jq", ".Buckets", env=dict(s.env), stdin=read_fd, stdout=asyncio.subprocess.PIPE
                 )
+                os.close(read_fd)
                 out, _ = await jq.communicate()
                 assert_that(await aws.wait()).is_equal_to(0)
                 assert_that(out.decode()).is_equal_to("[]")

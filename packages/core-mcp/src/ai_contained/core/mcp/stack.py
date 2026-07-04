@@ -1,12 +1,13 @@
 """Stack — the test kernel for AI-Contained providers.
 
-A Stack composes *real* providers through the same ``Context.ensure()``
-engine production boot uses. Substitution happens only at true system edges:
+A Stack composes *real* providers through the same ``ProviderContext``
+production ``load_providers()`` uses. Substitution happens only at true
+system edges:
 
 - subprocesses  -> ``exec()`` shims (generated fake binaries on PATH)
 - the human     -> ``elicit`` (a scripted Elicitor)
-- the network   -> in-process ASGI transport (peer identity simulated in
-  one documented place: ``ai_contained.trust.testing.loopback``)
+- the network   -> in-process transports (peer identity simulated in one
+  documented place: ``ai_contained.trust.testing.loopback``)
 
 Everything between those edges is production code wired by production
 ``provide()`` functions.
@@ -17,28 +18,35 @@ Kernel law — enforced in review, stated here so it is quotable:
    method that names a domain concept (AWS, trust, accounts, ...).
    Domain conveniences are free functions in each provider's own
    ``testing`` module, taking a Stack as their first argument.
-2. No assertions, no test base classes, no lifecycle beyond one async
-   context manager. Stack is something pytest fixtures *use*, not a
-   framework tests are written *in*.
-3. ``env`` is construction-time configuration, snapshotted per install() —
-   runtime behavior changes go through the exec-shim rules (read at each
-   spawn) or the Elicitor, never through env mutation.
+2. No assertions beyond the Elicitor drain check, no test base classes,
+   no lifecycle beyond one async context manager. Stack is something
+   pytest fixtures *use*, not a framework tests are written *in*.
+3. ``env`` is construction-time configuration — runtime behavior changes
+   go through the exec-shim rules (read at each spawn) or the Elicitor,
+   never through env mutation.
 """
 
-from collections.abc import Mapping
-from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
+import json
+import os
+import shutil
+import sys
+import tempfile
+from collections.abc import AsyncGenerator, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.client import Client
 
-from ai_contained.core.mcp.context import Provider
+from ai_contained.core.mcp.context import Provider, ProviderContext, ProviderState
 from ai_contained.core.mcp.testing import Elicitor, WrapCallToolResult
 
-# The result type tool calls resolve to. WrapCallToolResult is an internal
-# detail of the kernel from the consumer's point of view: construct nothing,
-# just read .is_error / .content / .json().
+# The result type tool calls resolve to. From the consumer's point of view
+# WrapCallToolResult is an internal detail: construct nothing, just read
+# .is_error / .content / .json().
 ToolResult = WrapCallToolResult
 
 
@@ -59,13 +67,31 @@ class ExecCall:
     env: dict[str, str] = field(default_factory=dict)  # environment the shim ran with
 
 
+# The one executable in the kernel: committed, reviewed source. exec() only
+# ever creates symlinks to it — tests never mint executable code on writable
+# filesystems, so noexec /tmp (docker's tmpfs default) is fully compatible.
+_SHIM_PATH = Path(__file__).parent / "_shim.py"
+
+
 class ExecShim:
     """A fake executable on the Stack's PATH, configured through a rules file.
 
-    The generated binary reads its rules at *each* invocation, so
-    reconfiguring mid-test is deterministic regardless of when any provider
-    snapshotted its env. Matching is longest-prefix-wins over argv.
+    The shim reads its rules at *each* invocation, so reconfiguring mid-test
+    is deterministic regardless of when any provider snapshotted its env.
+    Matching is longest-prefix-wins over argv.
     """
+
+    def __init__(self, name: str, bin_dir: Path, state_dir: Path, prefix: tuple[str, ...] = ()) -> None:
+        """Symlink ``bin_dir/name`` to the committed shim (once per name); views share files via ``on()``."""
+        self._name = name
+        self._prefix = prefix
+        self._rules_path = state_dir / f"{name}.rules.json"
+        self._calls_path = state_dir / f"{name}.calls.jsonl"
+        self._rules: dict[tuple[str, ...], list[ExecResponse]] = {}
+
+        link = bin_dir / name
+        if not link.exists():
+            link.symlink_to(_SHIM_PATH)
 
     def returns(self, *responses: ExecResponse) -> None:
         """Set what this rule answers: responses consumed in order, the last repeating forever.
@@ -75,7 +101,10 @@ class ExecShim:
         polling loops like SSO login. Calling returns() again replaces the
         whole sequence. At least one response is required.
         """
-        raise NotImplementedError
+        if not responses:
+            raise TypeError("returns() requires at least one ExecResponse")
+        self._rules[self._prefix] = list(responses)
+        self._flush()
 
     def on(self, *argv_prefix: str) -> "ExecShim":
         """Return a view scoped to invocations whose argv starts with ``argv_prefix``.
@@ -83,12 +112,30 @@ class ExecShim:
         ``shim.on("sts", "get-caller-identity").returns(...)`` adds a prefix
         rule with its own response sequence.
         """
-        raise NotImplementedError
+        view = ExecShim.__new__(ExecShim)
+        view._name = self._name
+        view._prefix = argv_prefix
+        view._rules_path = self._rules_path
+        view._calls_path = self._calls_path
+        view._rules = self._rules  # shared — all views write the same rule set
+        return view
 
     @property
     def calls(self) -> list[ExecCall]:
         """Every invocation so far, in order. Parsed from the shim's call log on access."""
-        raise NotImplementedError
+        if not self._calls_path.exists():
+            return []
+        records = [json.loads(line) for line in self._calls_path.read_text().splitlines()]
+        return [ExecCall(argv=r["argv"], env=r["env"]) for r in records]
+
+    def _flush(self) -> None:
+        """Atomically rewrite the rules file — a concurrently spawning shim never sees a partial write."""
+        content = json.dumps(
+            {"rules": [{"prefix": list(p), "responses": [asdict(r) for r in rs]} for p, rs in self._rules.items()]}
+        )
+        tmp = self._rules_path.with_suffix(".tmp")
+        tmp.write_text(content)
+        tmp.replace(self._rules_path)
 
 
 class ToolProxy:
@@ -99,17 +146,27 @@ class ToolProxy:
     inline ``WrapCallToolResult(**vars(...))`` construction.
     """
 
+    def __init__(self, client: Client[Any], name: str) -> None:
+        """Bind the proxy to a connected client and a tool name."""
+        self._client = client
+        self._name = name
+
     async def __call__(self, **kwargs: Any) -> ToolResult:
         """Call the tool with ``kwargs`` as its arguments."""
-        raise NotImplementedError
+        result = await self._client.call_tool(self._name, kwargs, raise_on_error=False)
+        return WrapCallToolResult(**vars(result))
 
 
 class StackClient:
     """An MCP client connected to the Stack's server, elicitation wired to ``stack.elicit``."""
 
+    def __init__(self, client: Client[Any]) -> None:
+        """Wrap a connected fastmcp client."""
+        self._client = client
+
     def tool(self, name: str) -> ToolProxy:
         """Return a proxy for the named tool."""
-        raise NotImplementedError
+        return ToolProxy(self._client, name)
 
 
 class Stack(AbstractAsyncContextManager["Stack"]):
@@ -118,7 +175,6 @@ class Stack(AbstractAsyncContextManager["Stack"]):
     ::
 
         async with Stack(env={"COLOR": "off"}) as s:
-            trust_testing.loopback(s)
             await s.install(trust_server.provide)
             await s.install(aws_secrets.provide)   # ensures trust_server — already installed
             await s.install(trust_client.provide)
@@ -129,42 +185,78 @@ class Stack(AbstractAsyncContextManager["Stack"]):
     Teardown asserts the Elicitor queue is drained and removes the tmpdir.
     """
 
-    env: dict[str, str]  # starts with PATH=<tmpdir>/bin:...; snapshotted per install()
-    mcp: FastMCP
-    elicit: Elicitor
-
     def __init__(self, env: Mapping[str, str] | None = None) -> None:
-        """Create an empty stack; ``env`` entries overlay the kernel defaults."""
-        raise NotImplementedError
+        """Create an empty stack; ``env`` entries overlay the kernel defaults.
 
-    async def install(self, provider: Provider, env: Mapping[str, str] | None = None) -> object | None:
+        PATH contains *only* the shim bin dir: a spawn the test didn't stub
+        fails loudly instead of falling through to a real system binary.
+        """
+        if not os.access(_SHIM_PATH, os.X_OK):
+            raise RuntimeError(
+                f"{_SHIM_PATH} is not executable — the install dropped its exec bit; chmod 755 it or reinstall"
+            )
+        self._tmpdir = Path(tempfile.mkdtemp(prefix="stack-"))
+        self._bin_dir = self._tmpdir / "bin"
+        self._shim_dir = self._tmpdir / "shims"
+        self._bin_dir.mkdir()
+        self._shim_dir.mkdir()
+        self._shims: dict[str, ExecShim] = {}
+        # The shim's `#!/usr/bin/env python3` resolves via PATH, which contains
+        # only the bin dir — so the interpreter is symlinked in alongside.
+        (self._bin_dir / "python3").symlink_to(sys.executable)
+
+        self.env: dict[str, str] = {
+            "PATH": str(self._bin_dir),
+            "STACK_SHIM_STATE": str(self._shim_dir),
+            **(env or {}),
+        }
+        self.mcp = FastMCP("stack")
+        self.elicit = Elicitor()
+        self._ctx = ProviderContext(self.mcp, self.env)
+
+    async def install(self, provider: Provider, env: Mapping[str, str] | None = None) -> ProviderState | None:
         """Merge ``env`` into ``self.env``, run the provider, add() its state, return it.
 
         Same loop step as production load_providers() — install order is
         load order, so install a dependency before its consumer (the
         ProviderNotLoaded error says which one is missing).
         """
-        raise NotImplementedError
+        if env:
+            self.env.update(env)
+        state = await provider(self._ctx)
+        self._ctx.add(provider, state)
+        return state
 
-    def add(self, provider: Provider, state: object | None) -> None:
+    def add(self, provider: Provider, state: ProviderState | None) -> None:
         """Stand in a hand-built state for ``provider`` — its real ``provide()`` never runs.
 
         The substitution seam for the rare isolated test; a later install()
         of the same provider would replace it (last add wins).
         """
-        raise NotImplementedError
+        self._ctx.add(provider, state)
 
     def write(self, name: str, content: str) -> str:
-        """Write ``content`` to ``<tmpdir>/<name>`` and return the absolute path."""
-        raise NotImplementedError
+        """Write ``content`` to ``<tmpdir>/<name>`` (parents created) and return the absolute path."""
+        path = self._tmpdir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        return str(path)
 
     def exec(self, name: str) -> ExecShim:
         """Return the shim for executable ``name``, generating it on the Stack's PATH on first use."""
-        raise NotImplementedError
+        if name not in self._shims:
+            self._shims[name] = ExecShim(name, self._bin_dir, self._shim_dir)
+        return self._shims[name]
 
     def client(self) -> AbstractAsyncContextManager[StackClient]:
         """Connect an MCP client to the stack's server (in-process transport)."""
-        raise NotImplementedError
+
+        @asynccontextmanager
+        async def connect() -> AsyncGenerator[StackClient, None]:
+            async with Client(transport=self.mcp, elicitation_handler=self.elicit) as client:
+                yield StackClient(client)
+
+        return connect()
 
     async def __aexit__(
         self,
@@ -172,5 +264,8 @@ class Stack(AbstractAsyncContextManager["Stack"]):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        """Tear down: assert the Elicitor queue is drained, close clients, remove the tmpdir."""
-        raise NotImplementedError
+        """Tear down: remove the tmpdir; assert the Elicitor drained — unless the body already failed."""
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if exc_type is None:
+            remaining = len(self.elicit._queue)
+            assert not remaining, f"{remaining} elicitation step(s) were never triggered"
