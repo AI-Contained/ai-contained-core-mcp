@@ -67,23 +67,21 @@ class ExecShim:
     snapshotted its env. Matching is longest-prefix-wins over argv.
     """
 
-    def returns(self, stdout: str = "", stderr: str = "", exit_code: int = 0) -> None:
-        """Set the default response (the empty-prefix rule)."""
+    def returns(self, *responses: ExecResponse) -> None:
+        """Set what this rule answers: responses consumed in order, the last repeating forever.
+
+        ``returns(ExecResponse(stdout="pending", exit_code=1), ExecResponse(stdout="done"))``
+        serves "pending" once, then "done" for every call after — the shape of
+        polling loops like SSO login. Calling returns() again replaces the
+        whole sequence. At least one response is required.
+        """
         raise NotImplementedError
 
     def on(self, *argv_prefix: str) -> "ExecShim":
         """Return a view scoped to invocations whose argv starts with ``argv_prefix``.
 
-        ``shim.on("sts", "get-caller-identity").returns(stdout=...)`` adds a
-        prefix rule; ``queue()`` on the view scripts a sequence for it.
-        """
-        raise NotImplementedError
-
-    def queue(self, *responses: ExecResponse) -> None:
-        """Script a consumed-in-order sequence of responses (e.g. SSO login flows).
-
-        When the queue is exhausted, matching falls back to the rule's
-        ``returns()`` response.
+        ``shim.on("sts", "get-caller-identity").returns(...)`` adds a prefix
+        rule with its own response sequence.
         """
         raise NotImplementedError
 
@@ -121,10 +119,10 @@ class Stack(AbstractAsyncContextManager["Stack"]):
 
         async with Stack(env={"COLOR": "off"}) as s:
             trust_testing.loopback(s)
-            await s.install(trust_server)
-            await s.install(aws_secrets)   # ensures trust_server — already installed
-            await s.install(trust_client)
-            await s.install(aws_cli)       # ensures trust_client — already installed
+            await s.install(trust_server.provide)
+            await s.install(aws_secrets.provide)   # ensures trust_server — already installed
+            await s.install(trust_client.provide)
+            await s.install(aws_cli.provide)       # ensures trust_client — already installed
             async with s.client() as c:
                 aws_read = c.tool("aws_read")
 
@@ -140,7 +138,7 @@ class Stack(AbstractAsyncContextManager["Stack"]):
         raise NotImplementedError
 
     async def install(self, provider: Provider, env: Mapping[str, str] | None = None) -> object | None:
-        """Merge ``env`` into ``self.env``, run ``provider.provide()``, add() its state, return it.
+        """Merge ``env`` into ``self.env``, run the provider, add() its state, return it.
 
         Same loop step as production load_providers() — install order is
         load order, so install a dependency before its consumer (the

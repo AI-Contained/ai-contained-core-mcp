@@ -28,7 +28,6 @@ Rules:
 """
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Protocol
 
 from fastmcp import FastMCP
 
@@ -36,11 +35,14 @@ from fastmcp import FastMCP
 # signatures — each provider returns its own concrete class (or None).
 ProviderState = object
 
-
-class Provider(Protocol):
-    """Structural type for a provider: any object (typically a module) with a ``provide`` entry point."""
-
-    provide: Callable[["ProviderContext"], Awaitable[ProviderState | None]]
+# A provider is the async callable its entry point references, same shape as
+# the original loader contract::
+#
+#     aws_cli = "ai_contained.provider.aws_cli:provide"
+#
+# It doubles as the key under which its state is stored — consumers ensure()
+# and tests add() using the same imported function, e.g. trust_client.provide.
+Provider = Callable[["ProviderContext"], Awaitable[ProviderState | None]]
 
 
 class ProviderNotLoaded(Exception):
@@ -53,8 +55,10 @@ class ProviderNotLoaded(Exception):
 
 
 def _name_of(provider: Provider) -> str:
-    """Display name for error messages — providers are modules, so __name__ is normally present."""
-    return getattr(provider, "__name__", repr(provider))
+    """Display name for error messages — module-qualified, since every provider function is named provide."""
+    name = getattr(provider, "__name__", repr(provider))
+    module = getattr(provider, "__module__", None)
+    return f"{module}.{name}" if module else name
 
 
 class ProviderContext:

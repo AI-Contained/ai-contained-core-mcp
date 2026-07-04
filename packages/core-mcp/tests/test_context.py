@@ -2,20 +2,16 @@ import pytest
 from assertpy import assert_that
 from fastmcp import FastMCP
 
-from ai_contained.core.mcp.context import ProviderContext, ProviderNotLoaded
+from ai_contained.core.mcp.context import Provider, ProviderContext, ProviderNotLoaded
 
 
-class FakeProvider:
-    """Satisfies the Provider protocol structurally — Context only ever uses it as a dict key here.
+def make_provider() -> Provider:
+    """A provider is just an async callable; each call returns a distinct one to key states by."""
 
-    In production a provider is a module; __name__ mimics that for the
-    error-message test.
-    """
+    async def fake_provider(ctx: ProviderContext) -> None:
+        raise AssertionError("the context never calls a provider — loading is the loader's job")
 
-    __name__ = "fake_provider"
-
-    async def provide(self, ctx: ProviderContext) -> None:
-        raise AssertionError("Context never calls provide() — loading is the loader's job")
+    return fake_provider
 
 
 def make_context(environ: dict[str, str] | None = None) -> ProviderContext:
@@ -34,7 +30,7 @@ def describe_ProviderContext() -> None:
 
     def describe_ensure() -> None:
         async def it_returns_the_added_state() -> None:
-            provider = FakeProvider()
+            provider = make_provider()
             expected = object()
             ctx = make_context()
             ctx.add(provider, expected)
@@ -43,7 +39,7 @@ def describe_ProviderContext() -> None:
         async def it_returns_none_state_without_raising() -> None:
             # None is a real state (most providers share nothing) — present-with-None
             # must be distinct from never-loaded.
-            provider = FakeProvider()
+            provider = make_provider()
             ctx = make_context()
             ctx.add(provider, None)
             assert_that(await ctx.ensure(provider)).is_none()
@@ -51,18 +47,18 @@ def describe_ProviderContext() -> None:
         async def it_raises_for_a_provider_that_has_not_loaded() -> None:
             ctx = make_context()
             with pytest.raises(ProviderNotLoaded):
-                await ctx.ensure(FakeProvider())
+                await ctx.ensure(make_provider())
 
         async def it_names_the_missing_provider_in_the_error() -> None:
             ctx = make_context()
             with pytest.raises(ProviderNotLoaded, match="fake_provider"):
-                await ctx.ensure(FakeProvider())
+                await ctx.ensure(make_provider())
 
     def describe_add() -> None:
         async def it_replaces_an_existing_state() -> None:
             # Last add wins — the loader adds once per provider; tests may
             # re-add to substitute.
-            provider = FakeProvider()
+            provider = make_provider()
             expected = object()
             ctx = make_context()
             ctx.add(provider, object())
@@ -70,7 +66,7 @@ def describe_ProviderContext() -> None:
             assert_that(await ctx.ensure(provider)).is_same_as(expected)
 
         async def it_tracks_states_per_provider() -> None:
-            first, second = FakeProvider(), FakeProvider()
+            first, second = make_provider(), make_provider()
             first_state, second_state = object(), object()
             ctx = make_context()
             ctx.add(first, first_state)
