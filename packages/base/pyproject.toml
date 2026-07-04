@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-contained-base"
-version = "0.3.2"
+version = "0.4.0"
 description = "Base Docker image with MCP server and provider finalization for AI-Contained"
 requires-python = ">=3.12"
 dependencies = [
