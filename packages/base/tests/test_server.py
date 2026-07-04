@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ai_contained.base.server import setup
+from ai_contained.core.mcp import ProviderContext
 
 
 class FakeProvider:
@@ -17,12 +18,12 @@ class FakeProvider:
 
     name = "fake_provider"
 
-    async def register(self, server: FastMCP) -> None:
-        @server.custom_route("/fake_custom_route", methods=["GET"])
+    async def provide(self, ctx: ProviderContext) -> None:
+        @ctx.mcp.custom_route("/fake_custom_route", methods=["GET"])
         async def handler(request: Request) -> JSONResponse:
             return JSONResponse({"ok": True})
 
-        @server.tool(name="fake_custom_tool")
+        @ctx.mcp.tool(name="fake_custom_tool")
         async def tool() -> str:
             return "hello"
 
@@ -30,7 +31,7 @@ class FakeProvider:
     def entry_point(self) -> MagicMock:
         ep = MagicMock()
         ep.name = self.name
-        ep.load.return_value = self.register
+        ep.load.return_value = self.provide
         return ep
 
 

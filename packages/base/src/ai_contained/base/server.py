@@ -9,11 +9,13 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from ai_contained.core.mcp import load_providers
+from ai_contained.core.mcp import ProviderContext, load_providers
 
 
 async def setup(mcp: FastMCP) -> None:
     """Register built-in routes and load all installed providers.
+
+    The one place os.environ is read — everything below consumes ctx.environ.
 
     Must be called before mcp.http_app() — FastMCP silently drops custom_routes
     added after http_app() runs (see tests/test_server.py).
@@ -23,7 +25,7 @@ async def setup(mcp: FastMCP) -> None:
     async def health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "healthy"})
 
-    await load_providers(mcp)
+    await load_providers(ProviderContext(mcp, os.environ))
 
 
 async def _serve(host: str, port: int) -> None:
