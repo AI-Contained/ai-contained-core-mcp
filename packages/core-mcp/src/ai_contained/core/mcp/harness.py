@@ -1,13 +1,13 @@
-"""Stack — the test kernel for AI-Contained providers.
+"""Harness — the test kernel for AI-Contained providers.
 
-A Stack composes *real* providers through the same ``ProviderContext``
+A Harness composes *real* providers through the same ``ProviderContext``
 production ``load_providers()`` uses. Substitution happens only at true
 system edges:
 
-- subprocesses  -> ``exec()`` shims (generated fake binaries on PATH)
+- subprocesses  -> ``exec()`` shims (fake binaries on PATH)
 - the human     -> ``elicit`` (a scripted Elicitor)
 - the network   -> in-process transports (peer identity simulated in one
-  documented place: ``ai_contained.trust.testing.loopback``)
+  documented place: ``raw_client()``)
 
 Everything between those edges is production code wired by production
 ``provide()`` functions.
@@ -17,9 +17,9 @@ Kernel law — enforced in review, stated here so it is quotable:
 1. This module never imports from a provider package and never grows a
    method that names a domain concept (AWS, trust, accounts, ...).
    Domain conveniences are free functions in each provider's own
-   ``testing`` module, taking a Stack as their first argument.
+   ``testing`` module, taking a Harness as their first argument.
 2. No assertions beyond the Elicitor drain check, no test base classes,
-   no lifecycle beyond one async context manager. Stack is something
+   no lifecycle beyond one async context manager. Harness is something
    pytest fixtures *use*, not a framework tests are written *in*.
 3. ``env`` is construction-time configuration — runtime behavior changes
    go through the exec-shim rules (read at each spawn) or the Elicitor,
@@ -75,7 +75,7 @@ _SHIM_PATH = Path(__file__).parent / "_shim.py"
 
 
 class ExecShim:
-    """A fake executable on the Stack's PATH, configured through a rules file.
+    """A fake executable on the Harness's PATH, configured through a rules file.
 
     The shim reads its rules at *each* invocation, so reconfiguring mid-test
     is deterministic regardless of when any provider snapshotted its env.
@@ -158,8 +158,8 @@ class ToolProxy:
         return WrapCallToolResult(**vars(result))
 
 
-class StackClient:
-    """An MCP client connected to the Stack's server, elicitation wired to ``stack.elicit``."""
+class HarnessClient:
+    """An MCP client connected to the Harness's server, elicitation wired to ``harness.elicit``."""
 
     def __init__(self, client: Client[Any]) -> None:
         """Wrap a connected fastmcp client."""
@@ -170,24 +170,24 @@ class StackClient:
         return ToolProxy(self._client, name)
 
 
-class Stack(AbstractAsyncContextManager["Stack"]):
+class Harness(AbstractAsyncContextManager["Harness"]):
     """One per test: a process-in-miniature running real providers.
 
     ::
 
-        async with Stack(env={"COLOR": "off"}) as s:
-            await s.install(trust_server.provide)
-            await s.install(aws_secrets.provide)   # ensures trust_server — already installed
-            await s.install(trust_client.provide)
-            await s.install(aws_cli.provide)       # ensures trust_client — already installed
-            async with s.client() as c:
+        async with Harness(env={"COLOR": "off"}) as h:
+            await h.install(trust_server.provide)
+            await h.install(aws_secrets.provide)   # ensures trust_server — already installed
+            await h.install(trust_client.provide)
+            await h.install(aws_cli.provide)       # ensures trust_client — already installed
+            async with h.client() as c:
                 aws_read = c.tool("aws_read")
 
     Teardown asserts the Elicitor queue is drained and removes the tmpdir.
     """
 
     def __init__(self, env: Mapping[str, str] | None = None) -> None:
-        """Create an empty stack; ``env`` entries overlay the kernel defaults.
+        """Create an empty harness; ``env`` entries overlay the kernel defaults.
 
         PATH contains *only* the shim bin dir: a spawn the test didn't stub
         fails loudly instead of falling through to a real system binary.
@@ -196,7 +196,7 @@ class Stack(AbstractAsyncContextManager["Stack"]):
             raise RuntimeError(
                 f"{_SHIM_PATH} is not executable — the install dropped its exec bit; chmod 755 it or reinstall"
             )
-        self._tmpdir = Path(tempfile.mkdtemp(prefix="stack-"))
+        self._tmpdir = Path(tempfile.mkdtemp(prefix="harness-"))
         self._bin_dir = self._tmpdir / "bin"
         self._shim_dir = self._tmpdir / "shims"
         self._bin_dir.mkdir()
@@ -208,10 +208,10 @@ class Stack(AbstractAsyncContextManager["Stack"]):
 
         self.env: dict[str, str] = {
             "PATH": str(self._bin_dir),
-            "STACK_SHIM_STATE": str(self._shim_dir),
+            "HARNESS_SHIM_STATE": str(self._shim_dir),
             **(env or {}),
         }
-        self.mcp = FastMCP("stack")
+        self.mcp = FastMCP("harness")
         self.elicit = Elicitor()
         self._ctx = ProviderContext(self.mcp, self.env)
 
@@ -244,23 +244,23 @@ class Stack(AbstractAsyncContextManager["Stack"]):
         return str(path)
 
     def exec(self, name: str) -> ExecShim:
-        """Return the shim for executable ``name``, generating it on the Stack's PATH on first use."""
+        """Return the shim for executable ``name``, creating it on the Harness's PATH on first use."""
         if name not in self._shims:
             self._shims[name] = ExecShim(name, self._bin_dir, self._shim_dir)
         return self._shims[name]
 
-    def client(self) -> AbstractAsyncContextManager[StackClient]:
-        """Connect an MCP client to the stack's server (in-process transport)."""
+    def client(self) -> AbstractAsyncContextManager[HarnessClient]:
+        """Connect an MCP client to the harness's server (in-process transport)."""
 
         @asynccontextmanager
-        async def connect() -> AsyncGenerator[StackClient, None]:
+        async def connect() -> AsyncGenerator[HarnessClient, None]:
             async with Client(transport=self.mcp, elicitation_handler=self.elicit) as client:
-                yield StackClient(client)
+                yield HarnessClient(client)
 
         return connect()
 
     def raw_client(self) -> httpx.AsyncClient:
-        """Raw HTTP client to the stack's server, with FAKE peer address 127.0.0.1.
+        """Raw HTTP client to the harness's server, with FAKE peer address 127.0.0.1.
 
         No socket is involved: ASGITransport dispatches in-process, and
         ``client=`` forges the (ip, port) pair the app sees — so handlers

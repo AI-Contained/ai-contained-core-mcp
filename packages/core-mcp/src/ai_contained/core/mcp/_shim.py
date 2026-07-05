@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""The Stack exec shim — the only executable in the test kernel.
+"""The Harness exec shim — the only executable in the test kernel.
 
-Stack.exec("aws") symlinks <tmpdir>/bin/aws to this committed file, so tests
-never mint executable code on writable filesystems (/tmp stays noexec; the
-symlink's *target* is what the kernel permission-checks). Everything dynamic
-is data:
+Harness.exec("aws") symlinks <tmpdir>/bin/aws to this committed file, so
+tests never mint executable code on writable filesystems (/tmp stays noexec;
+the symlink's *target* is what the kernel permission-checks). Everything
+dynamic is data:
 
 - identity     : basename(argv[0]) — the symlink's name
-- state dir    : $STACK_SHIM_STATE (set by Stack in the env providers inherit)
+- state dir    : $HARNESS_SHIM_STATE (set by Harness in the env providers inherit)
 - rules        : <state>/<name>.rules.json — longest-prefix match over argv;
                  each rule's responses are consumed in order, last repeats
 - call log     : <state>/<name>.calls.jsonl — argv + env per invocation
 
-Stdlib only; runs under the python3 symlink Stack places next to it.
+Stdlib only; runs under the python3 symlink Harness places next to it.
 """
 
 import json
@@ -29,9 +29,9 @@ def main() -> int:
     if stat.S_ISFIFO(os.fstat(0).st_mode):
         sys.stdin.buffer.read()  # drain the pipe so upstream never blocks
 
-    state_dir = os.environ.get("STACK_SHIM_STATE")
+    state_dir = os.environ.get("HARNESS_SHIM_STATE")
     if not state_dir:
-        sys.stderr.write(f"{name}: STACK_SHIM_STATE is not set — was the Stack env passed to this spawn?\n")
+        sys.stderr.write(f"{name}: HARNESS_SHIM_STATE is not set — was the Harness env passed to this spawn?\n")
         return 126
     rules_path = os.path.join(state_dir, f"{name}.rules.json")
     calls_path = os.path.join(state_dir, f"{name}.calls.jsonl")

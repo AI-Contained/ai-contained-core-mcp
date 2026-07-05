@@ -65,7 +65,7 @@ class ProviderContext:
     """Everything a provider is given at load time: the server, the env, and its dependencies."""
 
     def __init__(self, mcp: FastMCP, environ: Mapping[str, str]) -> None:
-        """Create the context load_providers() (or a test Stack) hands to each provide() call.
+        """Create the context load_providers() (or a test Harness) hands to each provide() call.
 
         Args:
             mcp: The server providers wire themselves onto. Must not be serving yet.
