@@ -38,6 +38,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+import httpx
 from fastmcp import FastMCP
 from fastmcp.client import Client
 
@@ -257,6 +258,22 @@ class Stack(AbstractAsyncContextManager["Stack"]):
                 yield StackClient(client)
 
         return connect()
+
+    def raw_client(self) -> httpx.AsyncClient:
+        """Raw HTTP client to the stack's server, with FAKE peer address 127.0.0.1.
+
+        No socket is involved: ASGITransport dispatches in-process, and
+        ``client=`` forges the (ip, port) pair the app sees — so handlers
+        that authorize by peer IP (e.g. trust registration) accept the
+        caller when 127.0.0.1 is allowlisted. Container-boundary behavior
+        (real DNS, real isolation) is out of scope by design.
+
+        Builds the ASGI app on call — install every provider and mount all
+        custom routes first; FastMCP drops custom_routes added after
+        http_app() runs.
+        """
+        transport = httpx.ASGITransport(app=self.mcp.http_app(), client=("127.0.0.1", 50000))
+        return httpx.AsyncClient(transport=transport, base_url="http://ignored")
 
     async def __aexit__(
         self,

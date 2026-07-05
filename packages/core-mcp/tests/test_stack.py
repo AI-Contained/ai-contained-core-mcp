@@ -7,6 +7,8 @@ import pytest
 from assertpy import assert_that
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from ai_contained.core.mcp.context import ProviderContext
 from ai_contained.core.mcp.stack import ExecResponse, Stack
@@ -307,6 +309,29 @@ def describe_Stack() -> None:
                 async with Stack() as s:
                     s.elicit.accept()
                     raise ValueError("body failed")
+
+    def describe_raw_client() -> None:
+        async def _provider_with_route(ctx: ProviderContext) -> None:
+            @ctx.mcp.custom_route("/peer", methods=["GET"])
+            async def peer(request: Request) -> JSONResponse:
+                assert request.client is not None
+                return JSONResponse({"host": request.client.host})
+
+        async def it_reaches_a_providers_custom_route() -> None:
+            async with Stack() as s:
+                await s.install(_provider_with_route)
+                async with s.raw_client() as http:
+                    response = await http.get("/peer")
+            assert_that(response.status_code).is_equal_to(200)
+
+        async def it_presents_the_fake_loopback_peer_address() -> None:
+            # The property IP-based trust registration authorizes on:
+            # handlers must see 127.0.0.1 as the caller.
+            async with Stack() as s:
+                await s.install(_provider_with_route)
+                async with s.raw_client() as http:
+                    response = await http.get("/peer")
+            assert_that(response.json()).is_equal_to({"host": "127.0.0.1"})
 
 
 def stack_env_without_aws(stack: Stack) -> dict[str, str]:
