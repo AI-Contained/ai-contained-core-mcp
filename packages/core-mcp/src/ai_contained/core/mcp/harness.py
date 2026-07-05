@@ -1,4 +1,4 @@
-"""Harness — the test kernel for AI-Contained providers.
+"""Harness — the test harness for AI-Contained providers.
 
 A Harness composes *real* providers through the same ``ProviderContext``
 production ``load_providers()`` uses. Substitution happens only at true
@@ -12,7 +12,7 @@ system edges:
 Everything between those edges is production code wired by production
 ``provide()`` functions.
 
-Kernel law — enforced in review, stated here so it is quotable:
+Rules for this module — enforced in review:
 
 1. This module never imports from a provider package and never grows a
    method that names a domain concept (AWS, trust, accounts, ...).
@@ -68,7 +68,7 @@ class ExecCall:
     env: dict[str, str] = field(default_factory=dict)  # environment the shim ran with
 
 
-# The one executable in the kernel: committed, reviewed source. exec() only
+# The harness's one executable: committed, reviewed source. exec() only
 # ever creates symlinks to it — tests never mint executable code on writable
 # filesystems, so noexec /tmp (docker's tmpfs default) is fully compatible.
 _SHIM_PATH = Path(__file__).parent / "_shim.py"
@@ -187,7 +187,7 @@ class Harness(AbstractAsyncContextManager["Harness"]):
     """
 
     def __init__(self, env: Environ | None = None) -> None:
-        """Create an empty harness; ``env`` entries overlay the kernel defaults.
+        """Create an empty harness; ``env`` entries overlay the harness defaults.
 
         PATH contains *only* the shim bin dir: a spawn the test didn't stub
         fails loudly instead of falling through to a real system binary.

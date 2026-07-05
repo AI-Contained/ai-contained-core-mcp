@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Harness exec shim — the only executable in the test kernel.
+"""The Harness exec shim — the test harness's only executable.
 
 Harness.exec("aws") symlinks <tmpdir>/bin/aws to this committed file, so
 tests never mint executable code on writable filesystems (/tmp stays noexec;
