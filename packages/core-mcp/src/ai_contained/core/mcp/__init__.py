@@ -28,6 +28,7 @@ from collections.abc import Mapping
 
 from fastmcp.utilities.logging import get_logger
 
+from ai_contained.core.mcp.context import Environ as Environ
 from ai_contained.core.mcp.context import Provider as Provider
 from ai_contained.core.mcp.context import ProviderContext as ProviderContext
 from ai_contained.core.mcp.context import ProviderNotLoaded as ProviderNotLoaded
@@ -36,7 +37,7 @@ from ai_contained.core.mcp.context import ProviderState as ProviderState
 logger = get_logger("ai_contained")
 
 
-def _env_split_csv(environ: Mapping[str, str], env_var: str) -> list[str]:
+def _env_split_csv(environ: Environ, env_var: str) -> list[str]:
     return [provider_name for provider_name in environ.get(env_var, "").split(",") if provider_name]
 
 

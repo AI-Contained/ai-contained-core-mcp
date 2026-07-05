@@ -31,6 +31,10 @@ from collections.abc import Awaitable, Callable, Mapping
 
 from fastmcp import FastMCP
 
+# A container's launch environment — immutable by convention: snapshotted at
+# boot, never mutated at runtime. The type for every environ parameter.
+Environ = Mapping[str, str]
+
 # What a provider shares with its dependents. An alias for readability in
 # signatures — each provider returns its own concrete class (or None).
 ProviderState = object
@@ -64,7 +68,7 @@ def _name_of(provider: Provider) -> str:
 class ProviderContext:
     """Everything a provider is given at load time: the server, the env, and its dependencies."""
 
-    def __init__(self, mcp: FastMCP, environ: Mapping[str, str]) -> None:
+    def __init__(self, mcp: FastMCP, environ: Environ) -> None:
         """Create the context load_providers() (or a test Harness) hands to each provide() call.
 
         Args:

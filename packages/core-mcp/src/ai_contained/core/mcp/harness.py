@@ -42,7 +42,7 @@ import httpx
 from fastmcp import FastMCP
 from fastmcp.client import Client
 
-from ai_contained.core.mcp.context import Provider, ProviderContext, ProviderState
+from ai_contained.core.mcp.context import Environ, Provider, ProviderContext, ProviderState
 from ai_contained.core.mcp.testing import Elicitor, WrapCallToolResult
 
 # The result type tool calls resolve to. From the consumer's point of view
@@ -186,7 +186,7 @@ class Harness(AbstractAsyncContextManager["Harness"]):
     Teardown asserts the Elicitor queue is drained and removes the tmpdir.
     """
 
-    def __init__(self, env: Mapping[str, str] | None = None) -> None:
+    def __init__(self, env: Environ | None = None) -> None:
         """Create an empty harness; ``env`` entries overlay the kernel defaults.
 
         PATH contains *only* the shim bin dir: a spawn the test didn't stub
@@ -215,7 +215,7 @@ class Harness(AbstractAsyncContextManager["Harness"]):
         self.elicit = Elicitor()
         self._ctx = ProviderContext(self.mcp, self.env)
 
-    async def install(self, provider: Provider, env: Mapping[str, str] | None = None) -> ProviderState | None:
+    async def install(self, provider: Provider, env: Environ | None = None) -> ProviderState | None:
         """Merge ``env`` into ``self.env``, run the provider, add() its state, return it.
 
         Same loop step as production load_providers() — install order is
