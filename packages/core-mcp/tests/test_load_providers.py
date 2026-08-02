@@ -6,7 +6,7 @@ import pytest
 from assertpy import assert_that
 from fastmcp import FastMCP
 
-from ai_contained.core.mcp import ProviderContext, load_providers
+from ai_contained.core.mcp import ProviderContext, ProviderNotLoaded, load_providers
 
 
 class MockProvider:
@@ -210,3 +210,37 @@ def describe_load_providers() -> None:
             await load_providers(make_context())
 
             assert_that(received).is_length(1)
+
+        async def it_loads_regardless_of_discovery_order(installed: Installed) -> None:
+            # The actual production bug this guards against: discovery order put the
+            # consumer before its dependency. Loading must self-converge via retry,
+            # not require the operator to sequence ALLOWED_PROVIDERS correctly.
+            dependency = MockProvider("dependency")
+            consumer = MockProvider("consumer")
+            received: list[object | None] = []
+
+            async def provide(ctx: ProviderContext) -> None:
+                received.append(await ctx.ensure(dependency.provide))
+
+            consumer._entry_point.load.return_value = provide
+            installed.set_providers(consumer, dependency)  # consumer discovered first
+
+            await load_providers(make_context())
+
+            assert_that(received).is_length(1)
+            assert_that(dependency.times_called()).is_equal_to(1)
+
+        async def it_raises_when_a_dependency_is_never_enabled(installed: Installed) -> None:
+            # Not a discovery-order problem: the dependency genuinely never loads
+            # (e.g. denied), so retrying must not loop forever — it must fail loudly.
+            consumer = MockProvider("consumer")
+            missing_dependency = MockProvider("missing")
+
+            async def provide(ctx: ProviderContext) -> None:
+                await ctx.ensure(missing_dependency.provide)
+
+            consumer._entry_point.load.return_value = provide
+            installed.set_providers(consumer)  # missing_dependency never installed/enabled
+
+            with pytest.raises(ProviderNotLoaded):
+                await load_providers(make_context())
