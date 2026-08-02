@@ -62,6 +62,4 @@ def main() -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".txt") as f:
             f.write(_local_overrides(providers))
             f.flush()
-            subprocess.run(
-                [*uv_install, "--break-system-packages", "--overrides", f.name, *providers], check=True
-            )
+            subprocess.run([*uv_install, "--break-system-packages", "--overrides", f.name, *providers], check=True)
