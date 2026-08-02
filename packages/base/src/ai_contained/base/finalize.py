@@ -6,10 +6,23 @@ import os
 import pathlib
 import shutil
 import subprocess
+import tempfile
 
 UV: str = shutil.which("uv") or ""
 if not UV:
     raise RuntimeError("uv not found in PATH")
+
+
+def _local_overrides(providers: list[str]) -> str:
+    """Build a uv --override file pinning every co-located provider to its own /opt/ copy.
+
+    Whatever the Dockerfile author chose to COPY --from= is authoritative: --override
+    replaces the *source* uv would otherwise pick for that name (a URL/git pin declared
+    by some other package's dependency), not just the version, so the local build
+    can never conflict with — or silently ignore — its own bundled copy.
+    """
+    lines = [f"{pathlib.Path(p.rstrip('/')).name} @ file://{p.rstrip('/')}" for p in providers]
+    return "\n".join(lines) + "\n"
 
 
 def _apk_packages() -> list[str]:
@@ -39,9 +52,16 @@ def main() -> None:
 
     # One invocation for all providers: uv resolves the union jointly, so a
     # shared dependency satisfies every provider's constraint instead of
-    # whichever provider happened to install last. Conflicting direct-URL
-    # pins fail the build loudly here — fix the pins, not the order.
+    # whichever provider happened to install last. --overrides makes every
+    # co-located /opt/ copy authoritative over any sibling's URL/git pin for
+    # the same name (see _local_overrides) — a genuine version mismatch still
+    # fails loudly, since --overrides replaces the source, not the check.
     providers = sorted(glob.glob("/opt/ai-contained-*/"))
     if providers:
         uv_install = [UV, "pip", "install", "--system", "--python", "/usr/local/bin/python3"]
-        subprocess.run([*uv_install, "--break-system-packages", *providers], check=True)
+        with tempfile.NamedTemporaryFile("w", suffix=".txt") as f:
+            f.write(_local_overrides(providers))
+            f.flush()
+            subprocess.run(
+                [*uv_install, "--break-system-packages", "--overrides", f.name, *providers], check=True
+            )
