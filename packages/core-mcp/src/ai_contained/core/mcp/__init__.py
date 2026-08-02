@@ -24,7 +24,6 @@ health checks must not pass before this point.
 """
 
 import importlib.metadata
-from collections.abc import Mapping
 
 from fastmcp.utilities.logging import get_logger
 

@@ -31,7 +31,7 @@ import os
 import shutil
 import sys
 import tempfile
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
